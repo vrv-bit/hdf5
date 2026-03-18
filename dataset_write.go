@@ -136,6 +136,10 @@ const (
 	// VLenUint64 represents variable-length uint64 sequences.
 	// Go type: [][]uint64.
 	VLenUint64 Datatype = 506
+
+	// VLenUint8 represents variable-length uint8 sequences (byte arrays).
+	// Go type: [][]byte.
+	VLenUint8 Datatype = 507
 )
 
 // Unlimited represents unlimited dimension size for resizable datasets.
@@ -238,7 +242,7 @@ func (h *arrayTypeHandler) GetInfo(config *datasetConfig) (*datatypeInfo, error)
 	// Calculate total array size (product of all dimensions * element size)
 	arraySize := uint32(1)
 	for _, dim := range config.arrayDims {
-		arraySize *= uint32(dim)
+		arraySize *= uint32(dim) //nolint:gosec // G115: array dims bounded by HDF5 format limits
 	}
 	arraySize *= baseInfo.size
 
@@ -320,13 +324,13 @@ func (h *enumTypeHandler) EncodeDatatypeMessage(info *datatypeInfo) ([]byte, err
 		offset := i * int(info.baseType.size)
 		switch info.baseType.size {
 		case 1:
-			valueBytes[offset] = byte(val)
+			valueBytes[offset] = byte(val) //nolint:gosec // G115: intentional signed-to-unsigned for serialization
 		case 2:
-			binary.LittleEndian.PutUint16(valueBytes[offset:], uint16(val))
+			binary.LittleEndian.PutUint16(valueBytes[offset:], uint16(val)) //nolint:gosec // G115: intentional signed-to-unsigned for serialization
 		case 4:
-			binary.LittleEndian.PutUint32(valueBytes[offset:], uint32(val))
+			binary.LittleEndian.PutUint32(valueBytes[offset:], uint32(val)) //nolint:gosec // G115: intentional signed-to-unsigned for serialization
 		case 8:
-			binary.LittleEndian.PutUint64(valueBytes[offset:], uint64(val))
+			binary.LittleEndian.PutUint64(valueBytes[offset:], uint64(val)) //nolint:gosec // G115: intentional signed-to-unsigned for serialization
 		}
 	}
 
@@ -523,6 +527,7 @@ func init() {
 		VLenFloat64: &vlenTypeHandler{Float64},
 		VLenUint32:  &vlenTypeHandler{Uint32},
 		VLenUint64:  &vlenTypeHandler{Uint64},
+		VLenUint8:   &vlenTypeHandler{Uint8},
 	}
 }
 
@@ -1311,7 +1316,7 @@ func (dw *DatasetWriter) WriteRaw(data []byte) error {
 // writeVLen handles writing variable-length data (strings, ragged arrays).
 // Data is written to global heap, and heap IDs are stored in the dataset.
 //
-//nolint:gocyclo,gocognit,cyclop,funlen // Complex by nature: handles multiple vlen types with validation
+//nolint:gocyclo,gocognit,cyclop,funlen,maintidx // Complex by nature: handles multiple vlen types with validation
 func (dw *DatasetWriter) writeVLen(data interface{}) error {
 	// Calculate expected number of elements
 	elemCount := uint64(1)
@@ -1349,7 +1354,7 @@ func (dw *DatasetWriter) writeVLen(data interface{}) error {
 			// Convert sequence to bytes (little-endian)
 			seqBytes := make([]byte, len(seq)*4)
 			for j, val := range seq {
-				binary.LittleEndian.PutUint32(seqBytes[j*4:], uint32(val))
+				binary.LittleEndian.PutUint32(seqBytes[j*4:], uint32(val)) //nolint:gosec // G115: intentional signed-to-unsigned for serialization
 			}
 
 			// Write to global heap
@@ -1369,7 +1374,7 @@ func (dw *DatasetWriter) writeVLen(data interface{}) error {
 		for i, seq := range v {
 			seqBytes := make([]byte, len(seq)*8)
 			for j, val := range seq {
-				binary.LittleEndian.PutUint64(seqBytes[j*8:], uint64(val))
+				binary.LittleEndian.PutUint64(seqBytes[j*8:], uint64(val)) //nolint:gosec // G115: intentional signed-to-unsigned for serialization
 			}
 
 			heapID, err := dw.fileWriter.globalHeapWriter.WriteToGlobalHeap(seqBytes)
@@ -1451,6 +1456,21 @@ func (dw *DatasetWriter) writeVLen(data interface{}) error {
 			heapID, err := dw.fileWriter.globalHeapWriter.WriteToGlobalHeap(seqBytes)
 			if err != nil {
 				return fmt.Errorf("write float64 sequence %d to heap: %w", i, err)
+			}
+			heapIDs[i] = heapID
+		}
+
+	case [][]byte:
+		// Variable-length uint8 sequences (byte arrays)
+		if uint64(len(v)) != elemCount {
+			return fmt.Errorf("data length %d doesn't match dataset size %d", len(v), elemCount)
+		}
+
+		for i, seq := range v {
+			// Uint8 elements are single bytes — direct copy, no binary encoding needed.
+			heapID, err := dw.fileWriter.globalHeapWriter.WriteToGlobalHeap(seq)
+			if err != nil {
+				return fmt.Errorf("write uint8 sequence %d to heap: %w", i, err)
 			}
 			heapIDs[i] = heapID
 		}
@@ -1650,7 +1670,7 @@ func encode1ByteIntegers(data interface{}, buf []byte) ([]byte, error) {
 	switch v := data.(type) {
 	case []int8:
 		for i, val := range v {
-			buf[i] = byte(val)
+			buf[i] = byte(val) //nolint:gosec // G115: intentional int8-to-byte for serialization
 		}
 	case []uint8:
 		copy(buf, v)
@@ -1665,7 +1685,7 @@ func encode2ByteIntegers(data interface{}, buf []byte) ([]byte, error) {
 	switch v := data.(type) {
 	case []int16:
 		for i, val := range v {
-			binary.LittleEndian.PutUint16(buf[i*2:], uint16(val))
+			binary.LittleEndian.PutUint16(buf[i*2:], uint16(val)) //nolint:gosec // G115: intentional signed-to-unsigned for serialization
 		}
 	case []uint16:
 		for i, val := range v {
@@ -1682,7 +1702,7 @@ func encode4ByteIntegers(data interface{}, buf []byte) ([]byte, error) {
 	switch v := data.(type) {
 	case []int32:
 		for i, val := range v {
-			binary.LittleEndian.PutUint32(buf[i*4:], uint32(val))
+			binary.LittleEndian.PutUint32(buf[i*4:], uint32(val)) //nolint:gosec // G115: intentional signed-to-unsigned for serialization
 		}
 	case []uint32:
 		for i, val := range v {
@@ -1699,7 +1719,7 @@ func encode8ByteIntegers(data interface{}, buf []byte) ([]byte, error) {
 	switch v := data.(type) {
 	case []int64:
 		for i, val := range v {
-			binary.LittleEndian.PutUint64(buf[i*8:], uint64(val))
+			binary.LittleEndian.PutUint64(buf[i*8:], uint64(val)) //nolint:gosec // G115: intentional signed-to-unsigned for serialization
 		}
 	case []uint64:
 		for i, val := range v {
